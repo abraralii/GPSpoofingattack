@@ -1,0 +1,126 @@
+import osmnx as ox
+import networkx as nx
+import matplotlib.pyplot as plt
+import numpy as np
+import random
+import time
+
+#  Multiple Origin-Destination (OD) pairs in Chicago
+routes = [
+    {"start": (41.9803, -87.9090), "end": (41.8827, -87.6233), "desc": "O'Hare → Downtown"},
+]
+
+# Load Chicago road network with travel speed estimates
+G = ox.graph_from_place("Chicago, Illinois, USA", network_type="drive")
+G = ox.add_edge_speeds(G)
+G = ox.add_edge_travel_times(G)
+
+# Define hyperparameters including GPS Spoofing, Traffic, and Road Closure
+hyperparameters = [
+    {
+        "type": "GPS Spoofing",
+        "location": (41.8900, -87.6300),  # Attack intersection location
+        "satellites": 5,
+        "deviation": 0.005,
+        "traffic": "High Congestion",
+        "road_closure": True,
+        "extra_time": 600  # Extra travel time in seconds due to spoofing impact
+    },
+]
+
+# Function to simulate GPS spoofing and generate orbiting satellites
+def simulate_gps_spoofing(G, route, hyperparam):
+    start_node = ox.distance.nearest_nodes(G, X=route["start"][1], Y=route["start"][0])
+    end_node = ox.distance.nearest_nodes(G, X=route["end"][1], Y=route["end"][0])
+
+    # Original route
+    original_route = nx.shortest_path(G, start_node, end_node, weight="travel_time")
+
+    # Find the closest node to the attack location
+    attack_node = ox.distance.nearest_nodes(G, X=hyperparam["location"][1], Y=hyperparam["location"][0])
+
+    # Split route: Before and after attack
+    if attack_node in original_route:
+        attack_index = original_route.index(attack_node)
+        route_before_attack = original_route[:attack_index + 1]  # Dark Green: Before attack
+        route_after_attack = original_route[attack_index:]  # Red: After attack
+    else:
+        route_before_attack = original_route
+        route_after_attack = []
+
+    # Spoofed route with increased travel time due to road closure
+    G_spoofed = G.copy()
+    for u, v, data in G_spoofed.edges(data=True):
+        if hyperparam["road_closure"]:
+            data["travel_time"] += hyperparam["extra_time"]
+
+    # Generate spoofed route from attack point onwards
+    if route_after_attack:
+        spoofed_route = nx.shortest_path(G_spoofed, attack_node, end_node, weight="travel_time")
+    else:
+        spoofed_route = []
+
+    # Generate spoofed satellite locations around the spoofed path
+    spoofed_satellites = [
+        [
+            route["end"][0] + random.uniform(-hyperparam["deviation"], hyperparam["deviation"]),
+            route["end"][1] + random.uniform(-hyperparam["deviation"], hyperparam["deviation"])
+        ]
+        for _ in range(hyperparam["satellites"])
+    ]
+
+    return route_before_attack, spoofed_route, spoofed_satellites, attack_node
+
+# Initialize the plot
+fig, ax = plt.subplots(figsize=(12, 12))
+ox.plot_graph(G, ax=ax, node_size=0, edge_color="gray", edge_linewidth=0.5, show=False, close=False)
+
+# Store spoofed satellites
+satellite_data = []
+attack_location = hyperparameters[0]["location"]
+
+for route, hyperparam in zip(routes, hyperparameters):
+    if hyperparam["type"] == "GPS Spoofing":
+        route_before_attack, spoofed_route, spoofed_satellites, attack_node = simulate_gps_spoofing(G, route, hyperparam)
+
+        # Plot original route before attack (Dark Green)
+        ox.plot_graph_route(G, route_before_attack, ax=ax, route_color='darkgreen', route_linewidth=5, show=False, close=False, label="Original Route")
+
+        # Plot attack-affected spoofed route (Red)
+        if spoofed_route:
+            ox.plot_graph_route(G, spoofed_route, ax=ax, route_color='red', route_linewidth=5, linestyle="solid", show=False, close=False, label="Spoofed Route")
+
+        # Store spoofed satellites for animation
+        satellite_data.extend(spoofed_satellites)
+
+        # Add attack intersection marker
+        attack_x, attack_y = G.nodes[attack_node]['x'], G.nodes[attack_node]['y']
+        ax.scatter(attack_x, attack_y, c='blue', marker='X', s=200, label="Attack Point", edgecolors='black')
+
+        # Annotate spoofing attack details
+        ax.annotate(
+            f"🚨 GPS Spoofing Attack 🚨\n"
+            f"Satellites: {hyperparam['satellites']}\n"
+            f"Traffic: {hyperparam['traffic']}\n"
+            f"Road Closure: {'Yes' if hyperparam['road_closure'] else 'No'}\n"
+            f"Extra Time: {hyperparam['extra_time']}s",
+            xy=(attack_x, attack_y),
+            xytext=(attack_x + 0.01, attack_y - 0.01),
+            fontsize=9,
+            bbox=dict(boxstyle="round", fc="white", ec="red", alpha=0.9)
+        )
+
+# Add spoofed satellites as orbiting stars
+for lat, lon in satellite_data:
+    ax.scatter(lon, lat, c='purple', marker='*', s=100, label="Spoofed Satellite")
+
+# Finalize the plot
+plt.title("GPS Spoofing Attack Visualization", fontsize=14, pad=20)
+plt.legend(handles=[
+    plt.Line2D([0], [0], color='darkgreen', linewidth=5, label='Original Route (Before Attack)'),
+    plt.Line2D([0], [0], color='red', linewidth=5, linestyle="solid", label='Spoofed Route (After Attack)'),
+    plt.Line2D([0], [0], color='purple', marker='*', linestyle='', markersize=10, label='Spoofed Satellites'),
+    plt.Line2D([0], [0], color='blue', marker='X', linestyle='', markersize=10, label='Attack Point')
+], loc="upper right", fontsize=10)
+
+plt.show()
